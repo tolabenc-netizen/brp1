@@ -1,5 +1,10 @@
 from django.urls import path
 
-from .views import healthcheck
+from .views import healthcheck, readiness, liveness, metrics
 
-urlpatterns = [path("healthcheck/", healthcheck, name="healthcheck")]
+urlpatterns = [
+    path("health/", healthcheck, name="healthcheck"),
+    path("ready/", readiness, name="readiness"),
+    path("live/", liveness, name="liveness"),
+    path("metrics/", metrics, name="metrics"),
+]
