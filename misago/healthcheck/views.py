@@ -8,8 +8,15 @@ from django.db import connection
 from django.core.cache import cache
 import redis
 import os
-import psutil
 from django.conf import settings
+from rest_framework.decorators import action
+
+# Make psutil optional to prevent import errors
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
 
 
 @action(methods=["get"], detail=True)
@@ -36,18 +43,24 @@ def healthcheck(request):
         redis_status = f"error: {str(e)}"
     
     # Check disk usage
-    try:
-        disk_usage = psutil.disk_usage('/')
-        disk_status = "ok" if disk_usage.percent < 90 else "warning"
-    except Exception as e:
-        disk_status = f"error: {str(e)}"
+    if PSUTIL_AVAILABLE:
+        try:
+            disk_usage = psutil.disk_usage('/')
+            disk_status = "ok" if disk_usage.percent < 90 else "warning"
+        except Exception as e:
+            disk_status = f"error: {str(e)}"
+    else:
+        disk_status = "unknown (psutil not available)"
     
     # Check memory usage
-    try:
-        memory = psutil.virtual_memory()
-        memory_status = "ok" if memory.percent < 90 else "warning"
-    except Exception as e:
-        memory_status = f"error: {str(e)}"
+    if PSUTIL_AVAILABLE:
+        try:
+            memory = psutil.virtual_memory()
+            memory_status = "ok" if memory.percent < 90 else "warning"
+        except Exception as e:
+            memory_status = f"error: {str(e)}"
+    else:
+        memory_status = "unknown (psutil not available)"
     
     # Overall status
     overall_status = "ok"
@@ -68,12 +81,19 @@ def healthcheck(request):
             "disk": disk_status,
             "memory": memory_status,
         },
-        "system": {
-            "cpu_percent": psutil.cpu_percent(interval=1),
-            "memory_percent": memory.percent,
-            "disk_percent": disk_usage.percent,
-        }
+        "system": {}
     }
+    
+    # Add system metrics only if psutil is available
+    if PSUTIL_AVAILABLE:
+        try:
+            response_data["system"] = {
+                "cpu_percent": psutil.cpu_percent(interval=1),
+                "memory_percent": memory.percent if 'memory' in locals() else 0,
+                "disk_percent": disk_usage.percent if 'disk_usage' in locals() else 0,
+            }
+        except Exception as e:
+            response_data["system"]["error"] = str(e)
     
     # Set appropriate HTTP status code
     status_code = 200
@@ -132,9 +152,14 @@ def metrics(request):
     """
     try:
         # Get system metrics
-        cpu_percent = psutil.cpu_percent(interval=0.1)
-        memory = psutil.virtual_memory()
-        disk = psutil.disk_usage('/')
+        if PSUTIL_AVAILABLE:
+            cpu_percent = psutil.cpu_percent(interval=0.1)
+            memory = psutil.virtual_memory()
+            disk = psutil.disk_usage('/')
+        else:
+            cpu_percent = None
+            memory = None
+            disk = None
         
         # Get database stats
         with connection.cursor() as cursor:
@@ -157,13 +182,7 @@ def metrics(request):
         
         response_data = {
             "metrics": {
-                "system": {
-                    "cpu_usage_percent": cpu_percent,
-                    "memory_usage_percent": memory.percent,
-                    "memory_available_gb": round(memory.available / (1024**3), 2),
-                    "disk_usage_percent": disk.percent,
-                    "disk_free_gb": round(disk.free / (1024**3), 2),
-                },
+                "system": {},
                 "database": {
                     "total_connections": db_stats[0] if db_stats else 0,
                     "active_connections": db_stats[1] if db_stats else 0,
@@ -176,6 +195,18 @@ def metrics(request):
             },
             "timestamp": request.META.get('HTTP_X_REQUEST_ID', ''),
         }
+        
+        # Add system metrics only if psutil is available
+        if PSUTIL_AVAILABLE and cpu_percent is not None:
+            response_data["metrics"]["system"] = {
+                "cpu_usage_percent": cpu_percent,
+                "memory_usage_percent": memory.percent,
+                "memory_available_gb": round(memory.available / (1024**3), 2),
+                "disk_usage_percent": disk.percent,
+                "disk_free_gb": round(disk.free / (1024**3), 2),
+            }
+        elif not PSUTIL_AVAILABLE:
+            response_data["metrics"]["system"]["error"] = "psutil not available"
         
         return JsonResponse(response_data)
         

@@ -39,6 +39,7 @@ boto3==1.34.34
 
 # Health checks
 django-health-check==3.17.0
+psutil==5.9.6
 
 # Image processing (if needed)
 Pillow==10.2.0
